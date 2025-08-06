@@ -1,31 +1,48 @@
+// --- กำหนดพินกล้องสำหรับ AI Thinker ESP32-CAM (แทน board_config.h) ---
+#define PWDN_GPIO_NUM     32
+#define RESET_GPIO_NUM    -1
+#define XCLK_GPIO_NUM     0
+#define SIOD_GPIO_NUM     26
+#define SIOC_GPIO_NUM     27
+
+#define Y9_GPIO_NUM       35
+#define Y8_GPIO_NUM       34
+#define Y7_GPIO_NUM       39
+#define Y6_GPIO_NUM       36
+#define Y5_GPIO_NUM       21
+#define Y4_GPIO_NUM       19
+#define Y3_GPIO_NUM       18
+#define Y2_GPIO_NUM       5
+
+#define VSYNC_GPIO_NUM    25
+#define HREF_GPIO_NUM     23
+#define PCLK_GPIO_NUM     22
+
+#define LED_GPIO_NUM      4  // ขาแฟลช LED
+
+// --- เริ่มโค้ดหลัก ---
+
 #include "esp_camera.h"
 #include <WiFi.h>
 #include <WebServer.h>
 
-// เลือกโมเดลกล้องใน board_config.h
-#include "board_config.h"
-
-// WiFi credentials
 const char *ssid = "NNN";
 const char *password = "Dday365Hr";
 
 WebServer server(80);
 
-#define FLASH_GPIO LED_GPIO_NUM  // กำหนดขาแฟลช (แก้ถ้าจำเป็น)
+#define FLASH_GPIO LED_GPIO_NUM
 
-// ฟังก์ชันเปิดแฟลช
 void handleFlashOn() {
   digitalWrite(FLASH_GPIO, HIGH);
   server.send(200, "text/plain", "Flash ON");
 }
 
-// ฟังก์ชันปิดแฟลช
 void handleFlashOff() {
   digitalWrite(FLASH_GPIO, LOW);
   server.send(200, "text/plain", "Flash OFF");
 }
 
-// ฟังก์ชันสตรีมภาพ (ตัวอย่างแบบง่ายๆ)
 void handleStream() {
   WiFiClient client = server.client();
 
@@ -45,9 +62,9 @@ void handleStream() {
     response += "Content-Length: " + String(fb->len) + "\r\n\r\n";
 
     server.sendContent(response);
-
     client.write(fb->buf, fb->len);
     server.sendContent("\r\n");
+
     esp_camera_fb_return(fb);
 
     if (!client.connected()) {
@@ -56,7 +73,6 @@ void handleStream() {
   }
 }
 
-// ตั้งค่าแฟลช (LED) ขา OUTPUT
 void setupLedFlash() {
   pinMode(FLASH_GPIO, OUTPUT);
   digitalWrite(FLASH_GPIO, LOW);
@@ -126,7 +142,7 @@ void setup() {
 
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("Camera init failed with error 0x%x", err);
+    Serial.printf("Camera init failed with error 0x%x\n", err);
     return;
   }
 
@@ -162,7 +178,7 @@ void setup() {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("");
+  Serial.println();
   Serial.println("WiFi connected");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
