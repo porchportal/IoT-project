@@ -1,19 +1,75 @@
 #include "esp_camera.h"
 #include <WiFi.h>
+#include <WebServer.h>
 
-// ===========================
-// Select camera model in board_config.h
-// ===========================
+// เลือกโมเดลกล้องใน board_config.h
 #include "board_config.h"
 
-// ===========================
-// Enter your WiFi credentials
-// ===========================
+// WiFi credentials
 const char *ssid = "NNN";
 const char *password = "Dday365Hr";
 
-void startCameraServer();
-void setupLedFlash();
+WebServer server(80);
+
+#define FLASH_GPIO LED_GPIO_NUM  // กำหนดขาแฟลช (แก้ถ้าจำเป็น)
+
+// ฟังก์ชันเปิดแฟลช
+void handleFlashOn() {
+  digitalWrite(FLASH_GPIO, HIGH);
+  server.send(200, "text/plain", "Flash ON");
+}
+
+// ฟังก์ชันปิดแฟลช
+void handleFlashOff() {
+  digitalWrite(FLASH_GPIO, LOW);
+  server.send(200, "text/plain", "Flash OFF");
+}
+
+// ฟังก์ชันสตรีมภาพ (ตัวอย่างแบบง่ายๆ)
+void handleStream() {
+  WiFiClient client = server.client();
+
+  String response = "HTTP/1.1 200 OK\r\n";
+  response += "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
+  server.sendContent(response);
+
+  while (true) {
+    camera_fb_t * fb = esp_camera_fb_get();
+    if (!fb) {
+      Serial.println("Camera capture failed");
+      return;
+    }
+
+    response = "--frame\r\n";
+    response += "Content-Type: image/jpeg\r\n";
+    response += "Content-Length: " + String(fb->len) + "\r\n\r\n";
+
+    server.sendContent(response);
+
+    client.write(fb->buf, fb->len);
+    server.sendContent("\r\n");
+    esp_camera_fb_return(fb);
+
+    if (!client.connected()) {
+      break;
+    }
+  }
+}
+
+// ตั้งค่าแฟลช (LED) ขา OUTPUT
+void setupLedFlash() {
+  pinMode(FLASH_GPIO, OUTPUT);
+  digitalWrite(FLASH_GPIO, LOW);
+}
+
+void startCameraServer() {
+  server.on("/flash/on", HTTP_GET, handleFlashOn);
+  server.on("/flash/off", HTTP_GET, handleFlashOff);
+  server.on("/stream", HTTP_GET, handleStream);
+
+  server.begin();
+  Serial.println("HTTP server started");
+}
 
 void setup() {
   Serial.begin(115200);
@@ -41,27 +97,22 @@ void setup() {
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.frame_size = FRAMESIZE_UXGA;
-  config.pixel_format = PIXFORMAT_JPEG;  // for streaming
-  //config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
+  config.pixel_format = PIXFORMAT_JPEG;
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_PSRAM;
   config.jpeg_quality = 12;
   config.fb_count = 1;
 
-  // if PSRAM IC present, init with UXGA resolution and higher JPEG quality
-  //                      for larger pre-allocated frame buffer.
   if (config.pixel_format == PIXFORMAT_JPEG) {
     if (psramFound()) {
       config.jpeg_quality = 10;
       config.fb_count = 2;
       config.grab_mode = CAMERA_GRAB_LATEST;
     } else {
-      // Limit the frame size when PSRAM is not available
       config.frame_size = FRAMESIZE_SVGA;
       config.fb_location = CAMERA_FB_IN_DRAM;
     }
   } else {
-    // Best option for face detection/recognition
     config.frame_size = FRAMESIZE_240X240;
 #if CONFIG_IDF_TARGET_ESP32S3
     config.fb_count = 2;
@@ -73,7 +124,6 @@ void setup() {
   pinMode(14, INPUT_PULLUP);
 #endif
 
-  // camera init
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed with error 0x%x", err);
@@ -81,13 +131,12 @@ void setup() {
   }
 
   sensor_t *s = esp_camera_sensor_get();
-  // initial sensors are flipped vertically and colors are a bit saturated
+
   if (s->id.PID == OV3660_PID) {
-    s->set_vflip(s, 1);        // flip it back
-    s->set_brightness(s, 1);   // up the brightness just a bit
-    s->set_saturation(s, -2);  // lower the saturation
+    s->set_vflip(s, 1);
+    s->set_brightness(s, 1);
+    s->set_saturation(s, -2);
   }
-  // drop down frame size for higher initial frame rate
   if (config.pixel_format == PIXFORMAT_JPEG) {
     s->set_framesize(s, FRAMESIZE_QVGA);
   }
@@ -101,7 +150,6 @@ void setup() {
   s->set_vflip(s, 1);
 #endif
 
-// Setup LED FLash if LED pin is defined in camera_pins.h
 #if defined(LED_GPIO_NUM)
   setupLedFlash();
 #endif
@@ -116,15 +164,18 @@ void setup() {
   }
   Serial.println("");
   Serial.println("WiFi connected");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
 
   startCameraServer();
 
-  Serial.print("Camera Ready! Use 'http://");
-  Serial.print(WiFi.localIP());
-  Serial.println("' to connect");
+  Serial.println("Camera Ready! Use:");
+  Serial.printf("  Flash ON:  http://%s/flash/on\n", WiFi.localIP().toString().c_str());
+  Serial.printf("  Flash OFF: http://%s/flash/off\n", WiFi.localIP().toString().c_str());
+  Serial.printf("  Stream:    http://%s/stream\n", WiFi.localIP().toString().c_str());
 }
 
 void loop() {
-  // Do nothing. Everything is done in another task by the web server
-  delay(10000);
+  server.handleClient();
+  delay(1);
 }

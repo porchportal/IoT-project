@@ -7,7 +7,7 @@ from collections import deque
 import requests
 
 # ====== CONFIG ======
-ESP32_IP = "192.168.78.93"  # เปลี่ยนเป็น IP ของคุณ
+ESP32_IP = "192.168.78.48"  # เปลี่ยนเป็น IP ของคุณ
 FLASH_ON_URL = f"http://{ESP32_IP}/flash/on"
 FLASH_OFF_URL = f"http://{ESP32_IP}/flash/off"
 CAM_STREAM_URL = f"http://{ESP32_IP}/stream"
@@ -39,37 +39,49 @@ mode_transition_grace_time = None
 ok_hold_start_time = None
 
 # ====== สถานะมือ ======
-class HandData:
-    def __init__(self):
-        self.finger_count = 0
-        self.volume_level = 50
-        self.distance_history = deque(maxlen=30)
-        self.is_detected = False
-        self.landmarks = None
+left_hand_data = {
+    'finger_count': 0,
+    'volume_level': 50,
+    'distance_history': deque(maxlen=30),
+    'volume_hold_start_time': None,
+    'saved_data': [],
+    'is_detected': False,
+    'landmarks': None
+}
 
-left_hand_data = HandData()
-right_hand_data = HandData()
+right_hand_data = {
+    'finger_count': 0,
+    'volume_level': 50,
+    'distance_history': deque(maxlen=30),
+    'volume_hold_start_time': None,
+    'saved_data': [],
+    'is_detected': False,
+    'landmarks': None
+}
 
 # ====== แฟลชสถานะ ======
 flash_on = False
 
 # ====== ฟังก์ชันเปิด/ปิดแฟลช ======
 def flash_on_request():
+    global flash_on
     try:
         r = requests.get(FLASH_ON_URL, timeout=2)
         print("Flash ON response:", r.text)
+        flash_on = True
     except Exception as e:
         print("Error sending flash ON request:", e)
 
 def flash_off_request():
+    global flash_on
     try:
         r = requests.get(FLASH_OFF_URL, timeout=2)
         print("Flash OFF response:", r.text)
+        flash_on = False
     except Exception as e:
         print("Error sending flash OFF request:", e)
 
 # ====== ฟังก์ชันช่วย ======
-
 def get_distance(lm1, lm2):
     return math.sqrt((lm1.x - lm2.x)**2 + (lm1.y - lm2.y)**2)
 
@@ -128,25 +140,23 @@ def is_fist(landmarks):
             return False
     return True
 
-def update_hand_data(landmarks, hand_label):
-    # สลับ label มือเพื่อแก้ปัญหามือซ้ายขวาสลับกัน
-    if hand_label == "Left":
-        hand_label = "Right"
-    elif hand_label == "Right":
-        hand_label = "Left"
+def is_open_hand(landmarks, hand_label):
+    return count_fingers(landmarks, hand_label) == 5
 
+def update_hand_data(landmarks, hand_label):
+    # ไม่ต้องสลับ label ซ้ำสองรอบ
     hand_data = right_hand_data if hand_label == "Right" else left_hand_data
-    hand_data.finger_count = count_fingers(landmarks, hand_label)
-    hand_data.is_detected = True
-    hand_data.landmarks = landmarks
+    hand_data['finger_count'] = count_fingers(landmarks, hand_label)
+    hand_data['is_detected'] = True
+    hand_data['landmarks'] = landmarks
 
 def reset_hand_data():
-    left_hand_data.is_detected = False
-    right_hand_data.is_detected = False
+    left_hand_data['is_detected'] = False
+    right_hand_data['is_detected'] = False
 
 def check_flash_control_trigger():
     # ถ้ามือขวากำมือแน่นในโหมด SYMBOL ให้สลับแฟลช
-    if right_hand_data.is_detected and is_fist(right_hand_data.landmarks) and current_mode == "SYMBOL":
+    if right_hand_data['is_detected'] and is_fist(right_hand_data['landmarks']) and current_mode == "SYMBOL":
         return True
     return False
 
@@ -154,12 +164,12 @@ def check_mode_transitions(current_time, frame):
     global current_mode, mode_transition_start_time, mode_transition_grace_time, ok_hold_start_time, flash_on
 
     ok_symbol_detected = False
-    if left_hand_data.is_detected and is_ok_symbol(left_hand_data.landmarks):
+    if left_hand_data['is_detected'] and is_ok_symbol(left_hand_data['landmarks']):
         ok_symbol_detected = True
-    if right_hand_data.is_detected and is_ok_symbol(right_hand_data.landmarks):
+    if right_hand_data['is_detected'] and is_ok_symbol(right_hand_data['landmarks']):
         ok_symbol_detected = True
 
-    # ถ้ามี OK symbol ตรวจจับทุกโหมด
+    # OK symbol ถือไว้เพื่อกลับสู่ NORMAL mode และปิดแฟลชถ้าเปิดอยู่
     if ok_symbol_detected:
         if ok_hold_start_time is None:
             ok_hold_start_time = current_time
@@ -170,7 +180,6 @@ def check_mode_transitions(current_time, frame):
         if elapsed >= OK_HOLD_DURATION:
             if current_mode == "FLASH_CONTROL" and flash_on:
                 flash_off_request()
-                flash_on = False
             current_mode = "NORMAL"
             print("[MODE] Switch to NORMAL mode")
             mode_transition_start_time = None
@@ -181,8 +190,8 @@ def check_mode_transitions(current_time, frame):
         ok_hold_start_time = None
 
     if current_mode == "NORMAL":
-        open_hand_detected = ((left_hand_data.is_detected and left_hand_data.finger_count == 5) or
-                              (right_hand_data.is_detected and right_hand_data.finger_count == 5))
+        open_hand_detected = ((left_hand_data['is_detected'] and left_hand_data['finger_count'] == 5) or
+                              (right_hand_data['is_detected'] and right_hand_data['finger_count'] == 5))
         if open_hand_detected:
             if mode_transition_start_time is None:
                 mode_transition_start_time = current_time
@@ -202,15 +211,17 @@ def check_mode_transitions(current_time, frame):
                     mode_transition_grace_time = None
 
     elif current_mode == "SYMBOL":
+        # ตรวจจับ trigger flash control
         if check_flash_control_trigger():
             current_mode = "FLASH_CONTROL"
             print("[MODE] Switch to FLASH_CONTROL mode")
-        # ควบคุมแฟลชตามสถานะมือขวา
-            if right_hand_data.finger_count == 0:  # กำมือ
-                flash_off_request()
-            elif right_hand_data.finger_count == 2:  # กางมือ
-                flash_on_request()
 
+        # ควบคุมแฟลชจากนิ้วมือขวา (0 นิ้ว=กำมือ=ปิดแฟลช, 2 นิ้ว=แฟลชเปิด)
+        if right_hand_data['is_detected']:
+            if right_hand_data['finger_count'] == 0 and flash_on:
+                flash_off_request()
+            elif right_hand_data['finger_count'] == 2 and not flash_on:
+                flash_on_request()
 
     elif current_mode == "FLASH_CONTROL":
         # รอ OK symbol เพื่อกลับ NORMAL mode และปิดแฟลช (handled ข้างบน)
@@ -239,12 +250,12 @@ def draw_status_info(frame, current_time):
             cv2.putText(frame, text, (10, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
-    if left_hand_data.is_detected:
-        cv2.putText(frame, f"Left fingers: {left_hand_data.finger_count}", (10, 130),
+    if left_hand_data['is_detected']:
+        cv2.putText(frame, f"Left fingers: {left_hand_data['finger_count']}", (10, 130),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-    if right_hand_data.is_detected:
-        cv2.putText(frame, f"Right fingers: {right_hand_data.finger_count}", (10, 170),
+    if right_hand_data['is_detected']:
+        cv2.putText(frame, f"Right fingers: {right_hand_data['finger_count']}", (10, 170),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
     if current_mode == "FLASH_CONTROL":
@@ -273,12 +284,7 @@ def main():
 
         if results.multi_hand_landmarks and results.multi_handedness:
             for hand_landmarks, hand_handedness in zip(results.multi_hand_landmarks, results.multi_handedness):
-                label = hand_handedness.classification[0].label
-                # สลับ label มือเพื่อแก้ปัญหามือซ้ายขวาสลับกัน
-                if label == "Left":
-                    label = "Right"
-                elif label == "Right":
-                    label = "Left"
+                label = hand_handedness.classification[0].label  # 'Left' or 'Right'
                 update_hand_data(hand_landmarks.landmark, label)
                 mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
