@@ -26,12 +26,32 @@
 #include <WiFi.h>
 #include <WebServer.h>
 
-const char *ssid = "NNN";
-const char *password = "Dday365Hr";
+const char *ssid = "No Phone No Brand";
+const char *password = "29varanpong";
 
 WebServer server(80);
 
 #define FLASH_GPIO LED_GPIO_NUM
+#include <HTTPClient.h>
+
+const char* ESP8266_URL = "http://172.20.10.5/post_log"; 
+
+void handleReceiveAndForward() {
+  String json = server.arg("plain"); // Get raw POST body from Python
+  Serial.print("Received from Python: ");
+  Serial.println(json);
+
+  // Forward to ESP8266
+  HTTPClient http;
+  http.begin(ESP8266_URL);
+  http.addHeader("Content-Type", "application/json");
+  int resp = http.POST(json);
+  Serial.print("Forwarded to ESP8266, response: ");
+  Serial.println(resp);
+  http.end();
+
+  server.send(200, "text/plain", "Log received and forwarded");
+}
 
 void handleFlashOn() {
   digitalWrite(FLASH_GPIO, HIGH);
@@ -82,10 +102,12 @@ void startCameraServer() {
   server.on("/flash/on", HTTP_GET, handleFlashOn);
   server.on("/flash/off", HTTP_GET, handleFlashOff);
   server.on("/stream", HTTP_GET, handleStream);
+  server.on("/receive", HTTP_POST, handleReceiveAndForward);
 
   server.begin();
   Serial.println("HTTP server started");
 }
+
 
 void setup() {
   Serial.begin(115200);
